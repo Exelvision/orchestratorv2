@@ -19,6 +19,7 @@ def fake_graph_output() -> dict[str, Any]:
                     "step_id": "1",
                     "description": "Do the thing",
                     "tool_name": "echo_text",
+                    "agent_id": None,
                     "inputs": "sample",
                     "expected_output": "echo",
                 }

@@ -1,6 +1,6 @@
 # Orchestrator v3
 
-FastAPI service that runs a **LangGraph** pipeline: structured **plan** (Pydantic via `with_structured_output`) then **`create_react_agent`** execution with LangChain `@tool` definitions.
+FastAPI service that runs a **LangGraph** pipeline: structured **plan** (Pydantic via `with_structured_output`) then **`create_agent`** (ReAct-style) execution with LangChain `@tool` definitions.
 
 ## Setup (use `.venv` only)
 
@@ -22,19 +22,26 @@ uvicorn orchestrator.main:app --reload --host 0.0.0.0 --port 8000
 
 ## Registering tools and flows
 
-Host applications pass tools and named flows into [`create_app`](orchestrator/main.py). That factory stores them on `app.state`; planning, execution, and `GET /orchestrate/tools` / `GET /orchestrate/flows` all use the same registry.
+Host applications pass tools, optional **registered agents** (named tool subsets), and named flows into [`create_app`](orchestrator/main.py). That factory stores them on `app.state`; planning, execution, and the catalog routes all use the same registry.
 
 ### Tools
 
 1. Define LangChain tools with the `@tool` decorator from `langchain.tools` (same pattern as this repo under [`orchestrator/tools/`](orchestrator/tools/)). The function **docstring** is exposed to the planner as the tool description; the tool’s **name** is usually the function name (for example `my_search`).
-2. Pass a sequence of tool objects to `create_app(tools=[...])`. If you omit `tools` or pass `None`, the app uses the package default list [`DEFAULT_TOOLS`](orchestrator/tools/__init__.py) (stub tools plus sample agents).
+2. Pass a sequence of tool objects to `create_app(tools=[...])`. If you omit `tools` or pass `None`, the app uses the package default list [`DEFAULT_TOOLS`](orchestrator/tools/__init__.py) (stub tools, sample agents, optional form stubs, and `commit_structured_output` for JSON artifacts).
 3. **Planner and executor** only know about the tools you register. Any `tool_name` in an [`OrchestratorPlan`](orchestrator/models.py) / [`PlanStep`](orchestrator/models.py) must match a registered tool name, or the ReAct agent cannot run that step.
+
+### Agents (optional, invokable from plans)
+
+1. Register [`RegisteredAgent`](orchestrator/models.py) instances with `create_app(agents=[...])`: each has an `id`, `description`, and `tool_names` (a **subset** of registered tool names). Validation fails if an id is duplicated, `tool_names` is empty, or any name is not on the app’s tool list.
+2. The planner sees an **agents manifest** alongside tools and can set [`PlanStep.agent_id`](orchestrator/models.py) on a step.
+3. **Execution:** if any step has `agent_id` and agents are registered, the executor runs **one sub-invocation per plan step**, each with **only that step’s agent tool subset** (or all tools when a step has no `agent_id`). If no step uses `agent_id`, behavior stays a **single** executor run; when agents are registered, the system prompt still lists them for soft delegation.
+4. List registered agents with `GET /orchestrate/agents`.
 
 ### Flows (named plans)
 
 1. A **flow** is a server-side id mapped to metadata plus a fixed [`OrchestratorPlan`](orchestrator/models.py):  
    `flow_id -> (title, description, plan)`.
-2. `title` and `description` appear in `GET /orchestrate/flows`. The `plan` is the same structured shape the planner would emit: `goal_summary`, `steps` (each [`PlanStep`](orchestrator/models.py) with `step_id`, `description`, optional `tool_name`, `inputs`, `expected_output`), and `final_output_description`.
+2. `title` and `description` appear in `GET /orchestrate/flows`. The `plan` is the same structured shape the planner would emit: `goal_summary`, `steps` (each [`PlanStep`](orchestrator/models.py) with `step_id`, `description`, optional `tool_name`, optional `agent_id`, `inputs`, `expected_output`), and `final_output_description`.
 3. Pass a mapping to `create_app(flows={...})`. If you omit `flows` or pass `None`, the app uses [`DEFAULT_FLOWS`](orchestrator/flow_registry.py). Passing your own dict **replaces** the default registry entirely; to keep built-in flows and add yours, merge explicitly, for example `{**DEFAULT_FLOWS, **my_flows}`.
 4. Clients run a named flow with `POST /orchestrate/flows/{flow_id}` (JSON body, or form `payload` + optional file uploads — see [API](#api)). The server loads the plan by id and runs the executor with your registered tools.
 
@@ -93,13 +100,14 @@ File uploads are always optional. Text-like files are inlined into the planner/e
 
 - `GET /health`
 - `GET /orchestrate/tools` — registered tool names and descriptions (matches `create_app(tools=...)`)
+- `GET /orchestrate/agents` — registered agent ids, descriptions, and `tool_names` (matches `create_app(agents=...)`)
 - `GET /orchestrate/flows` — named flow ids and metadata (matches `create_app(flows=...)`)
 - `POST /orchestrate/flows/{flow_id}` — run the executor with the server-registered plan for that id (`NamedFlowExecutePayload`: `user_prompt`, `chat_history`, optional `model` / `context` / `metadata`)
 - `POST /orchestrate/plan` — same payload shape as `POST /orchestrate`, but returns only the structured **plan** (no executor)
 - `POST /orchestrate/execute` — body includes an explicit **`plan`** plus `user_prompt` / `chat_history` / optional `context` / `metadata`; runs only the ReAct **executor**
 - `POST /orchestrate` — full graph: plan then execute (`OrchestratePayload`). Same handler is also mounted at **`POST /orchestrate/json`** for backward compatibility.
 
-**Orchestration responses** (`/orchestrate`, `/orchestrate/execute`, `/orchestrate/flows/{flow_id}`) include `answer` (final assistant text) and `messages`: a JSON array of LangChain message objects (`type`, `content`, `tool_calls`, `tool_call_id`, etc.) so clients can inspect tool rounds and multimodal content, not only the flattened string.
+**Orchestration responses** (`/orchestrate/json`, `/orchestrate`, `/orchestrate/execute`, `/orchestrate/flows/{flow_id}`) include `answer` (final assistant text), optional `artifact` (parsed JSON from the `commit_structured_output` tool when present — prefer this for machine-grounded data such as filled forms), and `messages`: a JSON array of LangChain message objects (`type`, `content`, `tool_calls`, `tool_call_id`, etc.) so clients can inspect tool rounds and multimodal content, not only the flattened string.
 
 OpenAPI: `http://localhost:8000/docs`
 

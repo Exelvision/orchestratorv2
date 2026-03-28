@@ -3,12 +3,14 @@ from __future__ import annotations
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from orchestrator.graph import (
+    _agents_manifest,
     _build_executor_messages,
     _history_lines,
     _tools_manifest,
     last_assistant_text,
     serialize_executor_messages,
 )
+from orchestrator.models import RegisteredAgent
 from orchestrator.tools import TOOLS
 
 
@@ -80,6 +82,16 @@ def test_tools_manifest_includes_registered_tools():
 
 def test_tools_manifest_empty_tools():
     assert _tools_manifest(()) == ""
+
+
+def test_agents_manifest_lists_ids_and_tools():
+    m = _agents_manifest(
+        [
+            RegisteredAgent(id="a1", description="d1", tool_names=["echo_text"]),
+        ],
+    )
+    assert "a1" in m
+    assert "echo_text" in m
 
 
 def test_build_executor_messages_order_and_plan_in_system():

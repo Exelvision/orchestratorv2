@@ -164,6 +164,7 @@ def test_orchestrate_json_success(client: TestClient, mock_graph, fake_graph_out
     assert call_state["user_prompt"] == "Hello"
     assert call_state["chat_history"] == [{"role": "user", "content": "Hi"}]
     assert "Client context" in call_state["attachment_context"]
+    assert call_state.get("agents") == []
     tool_state = call_state.get("tools")
     assert tool_state is not None
     assert [t.name for t in tool_state] == [t.name for t in DEFAULT_TOOLS]

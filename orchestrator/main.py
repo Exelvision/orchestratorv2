@@ -11,6 +11,8 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ValidationError
 from starlette.responses import JSONResponse
 
+from orchestrator.agents import validate_registered_agents
+from orchestrator.artifact import extract_structured_artifact
 from orchestrator.attachments import format_context_block, normalize_uploads
 from orchestrator.config import Settings, get_settings
 from orchestrator.flow_registry import DEFAULT_FLOWS, get_flow, list_flow_summaries
@@ -22,6 +24,7 @@ from orchestrator.graph import (
     serialize_executor_messages,
 )
 from orchestrator.models import (
+    AgentSummary,
     ExecutePayload,
     ExecuteResponse,
     FlowSummary,
@@ -29,6 +32,7 @@ from orchestrator.models import (
     OrchestratePayload,
     OrchestrateResponse,
     OrchestratorPlan,
+    RegisteredAgent,
     ToolSummary,
 )
 from orchestrator.logging_setup import configure_logging, get_logger
@@ -43,15 +47,18 @@ def create_app(
     *,
     tools: Sequence[BaseTool] | None = None,
     flows: Mapping[str, tuple[str, str, OrchestratorPlan]] | None = None,
+    agents: Sequence[RegisteredAgent] | None = None,
 ) -> FastAPI:
-    """Build a FastAPI app with configurable LangChain tools and named-flow registry.
+    """Build a FastAPI app with configurable LangChain tools, optional registered agents, and named-flow registry.
 
-    Host projects can ``pip install`` this package and call ``create_app(tools=my_tools, flows=my_flows)``
+    Host projects can ``pip install`` this package and call ``create_app(tools=my_tools, flows=my_flows, agents=my_agents)``
     to serve orchestration with domain-specific tools and plans.
     """
     configure_logging()
     app = FastAPI(title="Orchestrator", version="0.1.0")
-    app.state.tools = list(tools) if tools is not None else list(DEFAULT_TOOLS)
+    tool_list = list(tools) if tools is not None else list(DEFAULT_TOOLS)
+    app.state.tools = tool_list
+    app.state.agents = validate_registered_agents(tool_list, list(agents) if agents else None)
     app.state.flow_registry = dict(flows) if flows is not None else dict(DEFAULT_FLOWS)
 
     @app.middleware("http")
@@ -159,6 +166,7 @@ def create_app(
             "chat_history": [m.model_dump() for m in body.chat_history],
             "model_name": body.model,
             "tools": request.app.state.tools,
+            "agents": [a.model_dump(mode="json") for a in request.app.state.agents],
         }
         out = await GRAPH.ainvoke(state)
         plan = OrchestratorPlan.model_validate(out["plan"])
@@ -168,6 +176,7 @@ def create_app(
             plan=plan,
             answer=answer,
             messages=serialize_executor_messages(exec_messages),
+            artifact=extract_structured_artifact(exec_messages),
         )
 
     @app.post("/orchestrate/execute", response_model=ExecuteResponse)
@@ -183,17 +192,22 @@ def create_app(
         attachment_context = await _attachment_context_from_parts(
             files, settings, body.context, body.metadata
         )
-        messages = await run_executor(
-            plan=body.plan.model_dump(mode="json"),
-            user_prompt=body.user_prompt,
-            attachment_context=attachment_context,
-            chat_history=[m.model_dump() for m in body.chat_history],
-            model_name=body.model,
-            tools=request.app.state.tools,
-        )
+        try:
+            messages = await run_executor(
+                plan=body.plan.model_dump(mode="json"),
+                user_prompt=body.user_prompt,
+                attachment_context=attachment_context,
+                chat_history=[m.model_dump() for m in body.chat_history],
+                model_name=body.model,
+                tools=request.app.state.tools,
+                agents=list(request.app.state.agents),
+            )
+        except ValueError as e:
+            raise HTTPException(400, detail=str(e)) from e
         return ExecuteResponse(
             answer=last_assistant_text(messages),
             messages=serialize_executor_messages(messages),
+            artifact=extract_structured_artifact(messages),
         )
 
     @app.get("/orchestrate/tools", response_model=list[ToolSummary])
@@ -202,6 +216,14 @@ def create_app(
         return [
             ToolSummary(name=t.name, description=(t.description or "").strip())
             for t in request.app.state.tools
+        ]
+
+    @app.get("/orchestrate/agents", response_model=list[AgentSummary])
+    def list_orchestrate_agents(request: Request):
+        """List registered agents (named tool subsets referenced by PlanStep.agent_id)."""
+        return [
+            AgentSummary(id=a.id, description=a.description.strip(), tool_names=list(a.tool_names))
+            for a in request.app.state.agents
         ]
 
     @app.get("/orchestrate/flows", response_model=list[FlowSummary])
@@ -226,17 +248,22 @@ def create_app(
         attachment_context = await _attachment_context_from_parts(
             files, settings, body.context, body.metadata
         )
-        messages = await run_executor(
-            plan=plan.model_dump(mode="json"),
-            user_prompt=body.user_prompt,
-            attachment_context=attachment_context,
-            chat_history=[m.model_dump() for m in body.chat_history],
-            model_name=body.model,
-            tools=request.app.state.tools,
-        )
+        try:
+            messages = await run_executor(
+                plan=plan.model_dump(mode="json"),
+                user_prompt=body.user_prompt,
+                attachment_context=attachment_context,
+                chat_history=[m.model_dump() for m in body.chat_history],
+                model_name=body.model,
+                tools=request.app.state.tools,
+                agents=list(request.app.state.agents),
+            )
+        except ValueError as e:
+            raise HTTPException(400, detail=str(e)) from e
         return ExecuteResponse(
             answer=last_assistant_text(messages),
             messages=serialize_executor_messages(messages),
+            artifact=extract_structured_artifact(messages),
         )
 
     @app.post("/orchestrate/plan", response_model=OrchestratorPlan)
@@ -256,6 +283,7 @@ def create_app(
             chat_history=[m.model_dump() for m in body.chat_history],
             model_name=body.model,
             tools=request.app.state.tools,
+            agents=list(request.app.state.agents) or None,
         )
 
     @app.post("/orchestrate", response_model=OrchestrateResponse)

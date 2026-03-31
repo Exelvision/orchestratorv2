@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Demo: POST /orchestrate/json — prompt + chat history (calls OpenAI; needs OPENAI_API_KEY)."""
+"""Demo: POST /orchestrate — prompt + chat history (calls OpenAI; needs OPENAI_API_KEY)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import support
 
 
 def main() -> None:
-    support.banner("Demo: POST /orchestrate/json")
+    support.banner("Demo: POST /orchestrate")
     print(f"Base URL: {support.base_url()}")
     support.require_api()
     payload = {
@@ -26,7 +26,7 @@ def main() -> None:
     }
     support.print_json("Request body", payload)
     with support.client() as c:
-        r = c.post("/orchestrate/json", json=payload)
+        r = c.post("/orchestrate", json=payload)
     support.print_json(f"Response {r.status_code}", r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text)
     support.raise_for_status_verbose(r)
 

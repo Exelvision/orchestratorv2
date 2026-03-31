@@ -150,7 +150,7 @@ def test_orchestrate_json_success(client: TestClient, mock_graph, fake_graph_out
         "chat_history": [{"role": "user", "content": "Hi"}],
         "context": {"k": "v"},
     }
-    r = client.post("/orchestrate/json", json=body)
+    r = client.post("/orchestrate", json=body)
     assert r.status_code == 200
     data = r.json()
     assert data["plan"]["goal_summary"] == fake_graph_output["plan"]["goal_summary"]
@@ -263,9 +263,16 @@ def test_orchestrate_plan_only_validation_error(client: TestClient, monkeypatch:
 
 
 def test_orchestrate_json_validation_error(client: TestClient, mock_graph):
-    r = client.post("/orchestrate/json", json={})
+    r = client.post("/orchestrate", json={})
     assert r.status_code == 422
     mock_graph.ainvoke.assert_not_awaited()
+
+
+def test_orchestrate_json_legacy_path_alias(client: TestClient, mock_graph):
+    """``/orchestrate/json`` is the same handler as ``/orchestrate``."""
+    r = client.post("/orchestrate/json", json={"user_prompt": "alias path"})
+    assert r.status_code == 200
+    assert r.json()["answer"] == "Here is the final answer."
 
 
 def test_orchestrate_multipart_success(client: TestClient, mock_graph):
@@ -400,3 +407,104 @@ def test_orchestrate_named_flow_success(client: TestClient, monkeypatch: pytest.
     assert isinstance(plan, dict)
     assert plan["goal_summary"] == "Report how many words are in the user's text"
     assert "Client context" in str(captured.get("attachment_context", ""))
+
+
+def test_orchestrate_named_flow_multipart_file_in_attachment_context(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    from langchain_core.messages import AIMessage
+
+    captured: dict[str, str] = {}
+
+    async def fake_run_executor(**kwargs: object) -> list:
+        captured["attachment_context"] = str(kwargs.get("attachment_context", ""))
+        return [AIMessage(content="ok")]
+
+    monkeypatch.setattr("orchestrator.main.run_executor", fake_run_executor)
+    r = client.post(
+        "/orchestrate/flows/word_stats",
+        data={"payload": json.dumps({"user_prompt": "count words"})},
+        files=[("files", ("snippet.txt", b"one two three", "text/plain"))],
+    )
+    assert r.status_code == 200
+    ac = captured["attachment_context"]
+    assert "Uploaded files" in ac
+    assert "snippet.txt" in ac
+    assert "one two three" in ac
+
+
+def test_orchestrate_execute_multipart_file_in_attachment_context(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    from langchain_core.messages import AIMessage
+
+    captured: dict[str, str] = {}
+
+    async def fake_run_executor(**kwargs: object) -> list:
+        captured["attachment_context"] = str(kwargs.get("attachment_context", ""))
+        return [AIMessage(content="done")]
+
+    monkeypatch.setattr("orchestrator.main.run_executor", fake_run_executor)
+    r = client.post(
+        "/orchestrate/execute",
+        data={
+            "payload": json.dumps(
+                {
+                    "plan": {
+                        "goal_summary": "g",
+                        "steps": [],
+                        "final_output_description": "f",
+                    },
+                    "user_prompt": "run",
+                }
+            )
+        },
+        files=[("files", ("doc.txt", b"body text", "text/plain"))],
+    )
+    assert r.status_code == 200
+    ac = captured["attachment_context"]
+    assert "Uploaded files" in ac
+    assert "doc.txt" in ac
+    assert "body text" in ac
+
+
+def test_orchestrate_plan_multipart_file_in_attachment_context(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    from orchestrator.models import OrchestratorPlan
+
+    captured: dict[str, str] = {}
+
+    async def fake_generate_plan(**kwargs: object) -> OrchestratorPlan:
+        captured["attachment_context"] = str(kwargs.get("attachment_context", ""))
+        return OrchestratorPlan(
+            goal_summary="g",
+            steps=[],
+            final_output_description="f",
+        )
+
+    monkeypatch.setattr("orchestrator.main.generate_plan", fake_generate_plan)
+    r = client.post(
+        "/orchestrate/plan",
+        data={"payload": json.dumps({"user_prompt": "plan with file"})},
+        files=[("files", ("notes.txt", b"line", "text/plain"))],
+    )
+    assert r.status_code == 200
+    ac = captured["attachment_context"]
+    assert "Uploaded files" in ac
+    assert "notes.txt" in ac
+    assert "line" in ac
+
+
+def test_orchestrate_json_multipart_file_in_graph_state(client: TestClient, mock_graph):
+    r = client.post(
+        "/orchestrate",
+        data={"payload": json.dumps({"user_prompt": "with file"})},
+        files=[("files", ("data.txt", b"payload-bytes", "text/plain"))],
+    )
+    assert r.status_code == 200
+    state = mock_graph.ainvoke.call_args[0][0]
+    ac = state["attachment_context"]
+    assert "Uploaded files" in ac
+    assert "data.txt" in ac
+    assert "payload-bytes" in ac

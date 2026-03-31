@@ -36,7 +36,7 @@ Host applications pass tools and named flows into [`create_app`](orchestrator/ma
    `flow_id -> (title, description, plan)`.
 2. `title` and `description` appear in `GET /orchestrate/flows`. The `plan` is the same structured shape the planner would emit: `goal_summary`, `steps` (each [`PlanStep`](orchestrator/models.py) with `step_id`, `description`, optional `tool_name`, `inputs`, `expected_output`), and `final_output_description`.
 3. Pass a mapping to `create_app(flows={...})`. If you omit `flows` or pass `None`, the app uses [`DEFAULT_FLOWS`](orchestrator/flow_registry.py). Passing your own dict **replaces** the default registry entirely; to keep built-in flows and add yours, merge explicitly, for example `{**DEFAULT_FLOWS, **my_flows}`.
-4. Clients run a named flow with `POST /orchestrate/flows/{flow_id}` (body: user prompt, chat history, optional model/context/metadata). The server loads the plan by id and runs the executor with your registered tools.
+4. Clients run a named flow with `POST /orchestrate/flows/{flow_id}` (JSON body, or form `payload` + optional file uploads — see [API](#api)). The server loads the plan by id and runs the executor with your registered tools.
 
 ### Example: custom app module
 
@@ -83,16 +83,23 @@ If you replace `DEFAULT_FLOWS` entirely with plans that only use your own tools,
 
 ## API
 
+**Request bodies (orchestration routes):** Each `POST` below accepts either:
+
+- **`application/json`** — the documented JSON object for that route, or
+- **`multipart/form-data`** — form field `payload` (a JSON string with the **same** shape as the JSON body) and optional repeated `files` parts for uploads; or
+- **`application/x-www-form-urlencoded`** — field `payload` only (JSON string); file uploads are not available on this encoding.
+
+File uploads are always optional. Text-like files are inlined into the planner/executor context; other types are noted as non-text (see [`orchestrator/attachments.py`](orchestrator/attachments.py)).
+
 - `GET /health`
 - `GET /orchestrate/tools` — registered tool names and descriptions (matches `create_app(tools=...)`)
 - `GET /orchestrate/flows` — named flow ids and metadata (matches `create_app(flows=...)`)
-- `POST /orchestrate/flows/{flow_id}` — run the executor with the server-registered plan for that id (body: `user_prompt`, `chat_history`, optional `model` / `context` / `metadata`)
-- `POST /orchestrate/plan` — same JSON body as `/orchestrate/json`, but returns only the structured **plan** (no executor)
-- `POST /orchestrate/execute` — JSON body with an explicit **`plan`** plus `user_prompt` / `chat_history` / optional `context` / `metadata`; runs only the ReAct **executor**
-- `POST /orchestrate/json` — JSON body (`user_prompt`, `chat_history`, optional `model`, `context`, `metadata`)
-- `POST /orchestrate` — `multipart/form-data`: form field `payload` (JSON string, same shape) + optional file uploads
+- `POST /orchestrate/flows/{flow_id}` — run the executor with the server-registered plan for that id (`NamedFlowExecutePayload`: `user_prompt`, `chat_history`, optional `model` / `context` / `metadata`)
+- `POST /orchestrate/plan` — same payload shape as `POST /orchestrate`, but returns only the structured **plan** (no executor)
+- `POST /orchestrate/execute` — body includes an explicit **`plan`** plus `user_prompt` / `chat_history` / optional `context` / `metadata`; runs only the ReAct **executor**
+- `POST /orchestrate` — full graph: plan then execute (`OrchestratePayload`). Same handler is also mounted at **`POST /orchestrate/json`** for backward compatibility.
 
-**Orchestration responses** (`/orchestrate/json`, `/orchestrate`, `/orchestrate/execute`, `/orchestrate/flows/{flow_id}`) include `answer` (final assistant text) and `messages`: a JSON array of LangChain message objects (`type`, `content`, `tool_calls`, `tool_call_id`, etc.) so clients can inspect tool rounds and multimodal content, not only the flattened string.
+**Orchestration responses** (`/orchestrate`, `/orchestrate/execute`, `/orchestrate/flows/{flow_id}`) include `answer` (final assistant text) and `messages`: a JSON array of LangChain message objects (`type`, `content`, `tool_calls`, `tool_call_id`, etc.) so clients can inspect tool rounds and multimodal content, not only the flattened string.
 
 OpenAPI: `http://localhost:8000/docs`
 

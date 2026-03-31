@@ -67,7 +67,7 @@ python demos/demo_executor_only.py
 
 ---
 
-### `demo_orchestrate_json.py` — `POST /orchestrate/json`
+### `demo_orchestrate_json.py` — `POST /orchestrate`
 
 Full pipeline with `user_prompt` and `chat_history`.
 
@@ -77,7 +77,7 @@ python demos/demo_orchestrate_json.py
 
 ---
 
-### `demo_orchestrate_tools.py` — `POST /orchestrate/json`
+### `demo_orchestrate_tools.py` — `POST /orchestrate`
 
 Same route; prompt written to encourage `word_count` (or similar tools).
 
@@ -87,7 +87,7 @@ python demos/demo_orchestrate_tools.py
 
 ---
 
-### `demo_orchestrate_context.py` — `POST /orchestrate/json`
+### `demo_orchestrate_context.py` — `POST /orchestrate`
 
 Includes `context` and `metadata` in the JSON body.
 

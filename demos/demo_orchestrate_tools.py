@@ -24,7 +24,7 @@ def main() -> None:
     }
     support.print_json("Request body", payload)
     with support.client() as c:
-        r = c.post("/orchestrate/json", json=payload)
+        r = c.post("/orchestrate", json=payload)
     body = r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text
     support.print_json(f"Response {r.status_code}", body)
     support.raise_for_status_verbose(r)
